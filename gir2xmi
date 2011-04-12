@@ -1,0 +1,605 @@
+#!/usr/bin/perl -w
+#-*- mode: perl; -*-
+use strict;
+
+use XML::LibXML;
+use Getopt::Long;
+use Pod::Usage;
+use Data::Dumper;
+use File::Spec::Functions;
+use ObjectRef;
+use Carp qw(cluck carp);
+
+sub process_gir;
+sub preamble;
+sub append_new_element;
+
+my $options = {};
+our ($class, @namespace, %objects, @obj_key, $reg);
+
+GetOptions(
+    "output=s" => \$$options{output},
+    "path=s" => \$$options{gir_path}
+    ) or die "Option processing failed";
+
+my ($file) = @ARGV;
+
+my $dom0 = XML::LibXML->load_xml(location => $file);
+our $UML = 'http://www.omg.org/UML';
+our $curl = "http://www.gtk.org/introspection/c/1.0";
+
+#Create the output document and the root node:
+my $out = XML::LibXML->createDocument;
+my $root = $out->createElement("XMI");
+$out->setDocumentElement($root);
+
+#Register the output namespace:
+$root->setNamespace($UML, "UML", 0);
+
+new_reg("root");
+my $model = preamble($root);
+process_gir($dom0, $model);
+$out->toFile($$options{output}, 1);
+#print Data::Dumper->Dump([\%objects], ["Objects"]), "\n";
+
+sub preamble {
+    my $base = shift;
+    my $timestamp = scalar gmtime(time());
+
+    $base->setAttribute("verified", "false");
+    $base->setAttribute("timestamp", $timestamp);
+    $base->setAttribute("xmi.version", "1.1");
+
+    my $hdr = append_new_element($base,"XMI.header");
+    my $bar = append_new_element($hdr, "XMI.documentation");
+    $bar->appendTextChild("XMI.exporter", "gir2xmi");
+    $bar->appendTextChild("XMI.exporterVersion", "0.0.1");
+    my $metamodel = append_new_element($hdr, "XMI.metamodel");
+    $metamodel->setAttribute("xmi.name", "UML");
+    $metamodel->setAttribute("href", "UML.xml");
+    $metamodel->setAttribute("xmi.version", "1.3");
+    my $content = append_new_element($base, "XMI.content");
+    my $model = make_namespace($content, "Model", "TopLevel");
+    add_stereotype_element($model,"datatype");
+    add_stereotype_element($model,"virtual");
+    add_stereotype_element($model,"union");
+    add_stereotype_element($model,"record");
+    add_stereotype_element($model,"interface");
+    add_stereotype_element($model,"callback");
+    add_stereotype_element($model,"function");
+    add_stereotype_element($model,"constructor");
+    add_stereotype_element($model,"method");
+    add_stereotype_element($model,"signal");
+    add_stereotype_element($model,"bitfield");
+    add_stereotype_element($model,"property");
+    add_stereotype_element($model,"enum");
+    add_stereotype_element($model,"array");
+    add_datatype_element($model,"void");
+    add_datatype_element($model,"int");
+    add_datatype_element($model,"char");
+    add_datatype_element($model,"bool");
+    add_datatype_element($model,"float");
+    add_datatype_element($model,"short");
+    add_datatype_element($model,"unsigned int");
+    add_datatype_element($model,"unsigned char");
+    add_datatype_element($model,"unsigned long");
+    add_datatype_element($model,"unsigned float");
+    add_datatype_element($model,"unsigned short");
+    add_datatype_element($model,"gpointer");
+    add_datatype_element($model,"gboolean");
+    return $model;
+}
+
+sub new_reg {
+    my $name = shift;
+    push @obj_key, $name;
+    $objects{$name} = ObjectRef->new;
+    $reg = $objects{$name};
+}
+
+sub pop_reg {
+    pop @obj_key;
+    my $name = $obj_key[-1] or die "No remaining object keys";
+    $reg = $objects{$name};
+}
+
+sub current_namespace {
+    return $namespace[-1] if exists $namespace[-1];
+    return undef;
+}
+
+our @includes;
+
+sub find_include {
+    my ($name) = @_;
+    return scalar grep /^$name$/, @includes;
+}
+
+sub parse_type {
+    my ($type_elem) = @_;
+    die unless $type_elem->isa("XML::LibXML::Element");
+    my $name = $type_elem->getAttribute("name");
+    my $type = $type_elem->getAttributeNS($curl, "type");
+    $name = $type unless $name && $name ne "none";
+    die "Failed to find type name in element " . $type_elem->toString(0)
+	unless $name;
+    my $registry = $reg;
+    my $regname = "current";
+    if ($name =~ /(\w+)\.(\w+)/) {
+	$regname = $1;
+	$registry = $objects{$1};
+	$name = $2;
+    }
+
+    if ($registry->exists($name)) {
+	my $obj_type = $registry->object_type($name);
+	die "Registry $regname has an object $name with no type"
+	    unless $obj_type;
+	my $id = $registry->object_id($obj_type, $name);
+	return {name => $name, id => $id};
+    }
+
+    $registry->register_alias($type_elem) if ($name && $type && $name ne $type);
+    my $id = $registry->object_id("Temporary", $name);
+
+    return {name => $name, id => $id};
+}
+
+sub set_type_attribute {
+    my ($elem, $type) = @_;
+    my $name = parse_type($type);
+    die "No id from element " . $type->toString(0) unless $$name{id};
+    $elem->setAttribute("type", $$name{id});
+}
+
+
+sub get_input_xpath_context {
+    my $node = shift;
+    my $xpc = XML::LibXML::XPathContext->new($node);
+    $xpc->registerNs("gir", "http://www.gtk.org/introspection/core/1.0");
+    $xpc->registerNs("c", "http://www.gtk.org/introspection/c/1.0");
+    $xpc->registerNs("glib", "http://www.gtk.org/introspection/glib/1.0");
+    return $xpc;
+}
+
+sub process_gir {
+    my ($dom, $base) = @_;
+    my $xpc = get_input_xpath_context;
+    foreach my $inc ($xpc->findnodes("/gir:repository/gir:include", $dom)) {
+	my $name = $inc->getAttribute("name");
+	my $version = $inc->getAttribute("version");
+	my $filename = "$name-$version.gir";
+	next if find_include($filename);
+	push @includes, $filename;
+	my $path = catfile($$options{gir_path}, $filename);
+	die "$path not found" unless -f $path;
+	my $new_dom = XML::LibXML->load_xml(location => $path) or
+	    die "Parse failed for Gir $path";
+	process_gir($new_dom, $base);
+    }
+    foreach my $pkg  ($xpc->findnodes("/gir:repository/gir:namespace", $dom)) {
+	my $pkg_name = $pkg->getAttribute("name");
+	new_reg($pkg_name);
+	my $model = make_namespace($base, "Package", $pkg_name);
+	build_model($pkg, $model);
+	pop @namespace;
+	make_cleanup_datatypes($base, $model->parentNode);
+	pop_reg;
+    }
+}
+
+sub register_types {
+    my ($src, $dest) = @_;
+    my $xpc = get_input_xpath_context($src);
+    foreach my $alias ($xpc->findnodes("gir:alias")) {
+	$reg->register_alias($alias);
+    }
+    foreach my $enum ($xpc->findnodes("gir:enumeration|gir:bitfield")) {
+	$reg->register_object("Enumeration", $enum->getAttribute("name"));
+    }
+    foreach my $class ($xpc->findnodes("gir:class|gir:record|gir:union")) {
+	$reg->register_object("Class", $class->getAttribute("name"));
+    }
+    foreach my $class ($xpc->findnodes("gir:callback")) {
+	$reg->register_object("Callback", $class->getAttribute("name"));
+    }
+}
+
+sub make_enumerations {
+    my ($src, $dest) = @_;
+    my $xpc = get_input_xpath_context($src);
+    foreach my $enum ($xpc->findnodes("gir:enumeration|gir:bitfield")) {
+	my $name = $enum->getAttribute("name") || "anonymous";
+	my $elem = make_uml_element($dest, "Enumeration", $name);
+	element_set_stereotype($enum, lc $enum->localname);
+	my @members = $xpc->findnodes("gir:member", $enum);
+	next unless @members;
+	foreach my $member (@members) {
+	    my $tag = append_new_element($elem, "Enumeration.literal",
+					 "UML", $UML);
+	    my $lit = append_new_element($tag, "EnumerationLiteral",
+					 "UML", $UML);
+	    $lit->setAttribute("name", $member->getAttributeNS($curl,
+							       "identifier"));
+	}
+    }
+}
+sub make_interfaces {
+    my ($src, $dest) = @_;
+    my $xpc = get_input_xpath_context($src);
+    foreach my $class ($xpc->findnodes("gir:interface")) {
+	my $name = $class->getAttribute("name");
+	my $elem = make_uml_element($dest, "Interface", $name);
+	element_set_stereotype($elem, lc $class->localname);
+	my $parent = $class->getAttribute("parent");
+	if ($parent && $parent ne $name) {
+	    my $parent_id;
+	    if ($parent =~ /(\w+)\.(\w+)/) {
+		$parent_id = $objects{$1}->object_id("Interface", $2);
+	    } else {
+		$parent_id = $reg->object_id("Class", $parent);
+	    }
+	    $parent_id = "Not Found" unless $parent_id;
+	    $elem->setAttribute("parent", $parent_id);
+	}
+	my $feature = append_new_element($elem, "Classifier.feature",
+					 "UML", $UML);
+	make_operations($class, $feature, $name);
+    }
+}
+
+
+sub make_classes {
+    my ($src, $dest) = @_;
+    my $xpc = get_input_xpath_context($src);
+    foreach my $class ($xpc->findnodes("gir:class|gir:record|gir:union")) {
+	my $name = $class->getAttribute("name");
+	my $elem = make_uml_element($dest, "Class", $name);
+	element_set_stereotype($elem, lc $class->localname);
+	my $parent = $class->getAttribute("parent");
+	if ($parent && $parent ne $name) {
+	    my $parent_id;
+	    if ($parent =~ /(\w+)\.(\w+)/) {
+		$parent_id = $objects{$1}->object_id("Class", $2);
+	    } else {
+		$parent_id = $reg->object_id("Class", $parent);
+	    }
+	    $parent_id = "Not Found" unless $parent_id;
+	    $elem->setAttribute("parent", $parent_id);
+	}
+	my $feature = append_new_element($elem, "Classifier.feature",
+					 "UML", $UML);
+	make_attributes($class, $feature, $name);
+	make_operations($class, $feature, $name);
+    }
+}
+
+sub make_attributes {
+    my ($src, $dest, $clname) = @_;
+    my $xpc = get_input_xpath_context($src);
+    foreach my $field ($xpc->findnodes("gir:field|gir:property")) {
+	my $name = $field->getAttribute("name");
+	my $reg_name = $clname ? "$clname:Attribute:$name" : $name;
+	my $id = $reg->register_object("Attribute", $reg_name, 1);
+	my $elem = append_new_element($dest, "Attribute", "UML", $UML);
+	model_element_attrs($elem, $name, $id);
+	element_set_stereotype($elem, "property")
+	    if $field->localname eq "Property";
+	$elem->setAttribute("visibility", "private")
+	    if $field->getAttribute("private");
+	my @children = $xpc->findnodes("gir:type|gir:callback|gir:array", $field);
+	die "Element $name has no type or callback child"
+	    unless scalar @children > 0;
+	die "Element $name has multiple type or callback children"
+	    if scalar @children > 1;
+	my $child = $children[0];
+	my $childtype = $child->localname or die "Child of Element $name at " . $field->toString(0) . " has no element localname";
+	if ($childtype eq "type") {
+	    my $child_name = $child->getAttribute("name");
+	    if ($child_name &&
+		$reg->exists($child_name) &&
+		$reg->object_type($child_name) &&
+		$reg->object_type($child_name) eq "callback") {
+#FIXME: Need to construct a signature, but need to have the package-level callbacks processed first.
+	    } else {
+		eval {
+		    set_type_attribute($elem, $child);
+		};
+		if ( $@ ) {
+		    warn "Failed to set type attribute on\n" . $field->toString(1) . "\nDue to $@";
+		    next;
+		}
+	    }
+	} elsif ($childtype eq "callback") {
+	    my $signature = make_sig_from_gir($child);
+	    $elem->setAttribute("type", $reg->object_id("Callback",
+							 $signature));
+	    element_set_stereotype($elem, "callback");
+	} else {
+	    element_set_stereotype($elem, "array");
+	    eval {
+		set_type_attribute($elem, $child);
+	    };
+	    if ( $@ ) {
+		warn "Failed to set type attribute on\n" . $field->toString(1) . "\nDue to $@";
+		next;
+	    }
+
+	}
+    }
+}
+
+sub make_sig_from_gir {
+    my ($src) = @_;
+    my $xpc = get_input_xpath_context($src);
+    my $name = $src->getAttribute("name");
+    my $signature;
+    my @retval = $xpc->findnodes("gir:return-value/gir:type");
+    if (scalar @retval == 0) {
+	$signature = "(void)$name(";
+    } elsif (scalar @retval == 1) {
+	eval {
+	    my $type = parse_type($retval[0]);
+	    my $type_name = $$type{name} || "void";
+	    $signature = "($type_name)$name(";
+	};
+	if ($@) {
+	    die "Bad return-value element\n" . $retval[0] .
+		"\n from\n" . $src->toString(1) .
+		"\nError: $@";
+	}
+    } else {
+	die "Multiple return values found for callback in field $name";
+    }
+
+    foreach my $param ($xpc->findnodes("gir:parameters/gir:parameter/gir:type")) {
+	eval {
+	    my $type = parse_type($param);
+	    my $type_name = $$type{name} || "void";
+	    $signature .= $type_name;
+	};
+	if ($@) {
+	    warn "Bad parameter element\n" . $param .
+		"\nfrom\n" . $src->toString(1) .
+		"\nCaused by $@";
+	    next;
+	}
+
+	$signature .= ", ";
+    }
+#	    print "Callback signature before substringing $signature\n";
+    $signature = substr( $signature, 0, -2) . ")";
+#	    print "Callback signature after substringing $signature\n";
+    return $signature;
+}
+
+sub make_op {
+    my ($src, $dest, $clname) = @_;
+    my $xpc = get_input_xpath_context($src);
+    my $name = $src->getAttribute("name");
+    my $reg_name = $clname ? "$clname:Operation:$name" : "$name-impl";
+    my $id;
+    $id = $reg->register_object("Operation", $reg_name, 1);
+    my $elem = append_new_element($dest, "Operation", "UML", $UML);
+    model_element_attrs($elem, $name, $id);
+    element_set_stereotype($elem, lc $src->localname);
+	    $elem->setAttribute("isLeaf", "true");
+    if ($xpc->findnodes("gir:return-type|gir:parameters/gir:parameter")) {
+	my $features = append_new_element($elem,
+					  "BehavioralFeature.parameter",
+					  "UML", $UML);
+	make_parameters($src, $features);
+    }
+    return $elem;
+}
+
+sub make_operations {
+    my ($src, $dest, $clname) = @_;
+    my $xpc = get_input_xpath_context($src);
+    foreach my $op ($xpc->findnodes("gir:function|gir:method|gir:callback|gir:constructor")) {
+	make_op($op, $dest, $clname);
+    }
+    foreach my $op ($xpc->findnodes("gir:virtual-method")) {
+	my $name = $op->getAttribute("name");
+	if (my @nodes = $dest->findnodes('UML:Operation[@name=\'' . "$name\']")) {
+	    die "Virtual method $clname:$name has more than one implementation"
+		if @nodes > 1;
+	    $nodes[0]->setAttribute("isLeaf", "false");
+	} else {
+	    my $elem = make_op($op, $dest, $clname);
+	    $elem->setAttribute("isAbstract", "true");
+	    $elem->setAttribute("isLeaf", "false");
+	    $dest->parentNode->setAttribute("isAbstract", "true");
+	}
+    }
+}
+
+sub make_parameters {
+    my ($src, $dest) = @_;
+    my $xpc = get_input_xpath_context($src);
+    my $opname = $dest->parentNode->getAttribute("name");
+    foreach my $param ($xpc->findnodes("gir:return-value|gir:parameters/gir:parameter")) {
+	my $name = $param->localname eq "return-value" ? "return" :
+	    $param->getAttribute("name");
+	$name = "varargs" unless $name;
+	my $elem = append_new_element($dest, "Parameter", "UML", $UML);
+	$elem->setAttribute("name", $name);
+	my $kind = $param->localname eq "return-value" ? "return" :
+	    $param->getAttribute("direction") ?
+	    $param->getAttribute("direction") : "in";
+	$elem->setAttribute("kind", $kind);
+	my @type = $xpc->findnodes("gir:type|gir:array|gir:varargs", $param);
+	die "No type element on parameter $opname.$name" unless @type;
+	die "Multiple type elements on parameter $opname.$name" if @type > 1;
+	set_type_attribute($elem, $type[0]) if $type[0]->localname eq "type";
+	element_set_stereotype($elem, "varargs")
+	    if $type[0]->localname eq "varargs";
+	if ($type[0]->localname eq "array") {
+	    element_set_stereotype($elem, "array");
+	    my @array_type = $xpc->findnodes("gir:type", $type[0]);
+	    die "No type for array in parameter $opname.$name"
+		unless @array_type;
+	    die "Multiple types for array in parameter $opname.$name"
+		if @array_type > 1;
+	    set_type_attribute($elem, $array_type[0]);
+	}
+    }
+}
+
+sub make_utility_interface {
+    my ($src, $dest) = @_;
+    my $util = make_uml_element($dest, "Interface", "Utility");
+    my $feature = append_new_element($util, "Classifier.feature", "UML", $UML);
+    make_operations($src, $feature);
+}
+
+sub make_cleanup_datatypes {
+    my ($model, $pkg) = @_;
+    foreach my $hash (@{$reg->get_unregistered}) {
+	unless ($$hash{type} && $$hash{name}) {
+	    print Data::Dumper->Dump([$hash], ["Registered Hash"]);
+	    next;
+	}
+	$$hash{type} = "DataType" if $$hash{type} eq "Temporary";
+	if ($$hash{type} eq "Callback") {
+	    $reg->change_type($$hash{name}, "DataType");
+	    my $elem = insert_uml_element($model, "DataType",
+					  $$hash{name}, $pkg);
+	    next unless $elem;
+	    element_set_stereotype($elem, "callback");
+	    $elem->setAttribute("comment", "$$hash{name}-impl");
+	    next;
+	}
+	warn "Uninstantiated $$hash{type} $$hash{name}" if $$hash{type} ne "DataType";
+	my $elem = insert_uml_element($model, $$hash{type}, $$hash{name}, $pkg);
+	next unless $elem;
+	element_set_stereotype($elem, "datatype") if $$hash{type} eq "DataType";
+    }
+}
+
+sub insert_uml_element {
+    my ($base, $type, $name, $refnode) = @_;
+    cluck ("Can't insert_uml_element without a type and a name")
+	unless $type && $name;
+    cluck "Can't insert_uml_element without a reference node"
+	unless $refnode;
+    my $id = $reg->register_object($type, $name, 1);
+    $type = "UML:$type";
+    my $elem;
+    eval {
+	$elem = $out->createElementNS($UML, $type);
+    };
+    if ($@) {
+	print STDERR "createElementNS threw $@ for element $name\n";
+	return undef;
+    }
+    $base->insertBefore($elem, $refnode);
+    element_set_namespace($elem);
+    generalizable_element_attrs($elem, $name, $id);
+    return $elem;
+}
+
+sub build_model {
+    my ($src, $dest) = @_;
+    register_types($src, $dest);
+    make_enumerations($src, $dest);
+    make_utility_interface($src, $dest);
+    make_interfaces($src, $dest);
+    make_classes($src, $dest);
+}
+
+sub append_new_element {
+    my ($base, $name, $prefix, $uri) = @_;
+    my $elem;
+    if ($uri) {
+	$name = "$prefix:$name" if $prefix;
+	$elem = $out->createElementNS($uri, $name);
+    } else {
+	$elem = $out->createElement($name);
+    }
+    $base->appendChild($elem);
+    return $elem;
+}
+
+sub model_element_attrs {
+    my ($elem, $name, $id) = @_;
+    my $namespace = current_namespace();
+    die "Can't create a ModelElement with no id" unless $id;
+
+    $elem->setAttribute("xmi.id", $id);
+    $elem->setAttribute("visibility", "public");
+    $elem->setAttribute("isSpecification", "false");
+    $elem->setAttribute("name", $name) if $name;
+
+# The following will be added when needed
+#	$elem->setAttribute("clientDependency", $depends),
+#	$elem->setAttribute("constraint", $constraints),
+#	$elem->setAttribute("targetFlow", $targetFlows),
+#	$elem->setAttribute("sourceFlow", $sourceFlows),
+#	$elem->setAttribute("comment", $comments),
+#        stereotype: Use element_set_stereotype()
+}
+
+sub generalizable_element_attrs {
+    my ($elem, $name, $id) = @_;
+    model_element_attrs($elem, $name, $id);
+    $elem->setAttribute("isRoot", "false");
+    $elem->setAttribute("isLeaf", "false");
+    $elem->setAttribute("isAbstract", "false");
+}
+
+sub element_set_stereotype {
+    my ($elem, $type) = @_;
+    $elem->setAttribute("stereotype", lc $type);
+}
+
+sub element_set_namespace {
+    my ($elem) = @_;
+    my $ns = current_namespace() or return;
+    $elem->setAttribute("namespace", $ns);
+}
+
+sub make_uml_element {
+    my ($elem, $type, $name) = @_;
+    my $obj_name = $name;
+    cluck ("Can't make_uml_element without a type and a name")
+	unless $type && $name;
+#    my $class = get_current_class();
+#    $obj_name = "$class:$name"
+#	if ($type eq "Operation" && $class);
+    my $id = $reg->register_object($type, $name, 1);
+    my $element = append_new_element($elem, $type,"UML", $UML);
+    element_set_namespace($element);
+    generalizable_element_attrs($element, $name, $id);
+    return $element;
+}
+
+sub add_stereotype_element {
+    my ($base, $stereotype) = @_;
+    my $elem = append_new_element($base, "Stereotype", "UML", $UML);
+    element_set_namespace($elem);
+    generalizable_element_attrs($elem, $stereotype, $stereotype);
+}
+
+sub add_datatype_element {
+    my ($base, $name) = @_;
+    my $element = make_uml_element($base, "DataType", $name);
+    element_set_stereotype($element, "datatype");
+}
+
+#This refers to an XMI namespace, not an XML namespace.
+sub make_namespace {
+    my ($base, $ns, $name) = @_;
+    unless ($ns eq "Model" || $ns eq "Package") {
+#	$self->xml_warning( "Invalid namespace type $ns");
+	return;
+    }
+    my $ns_element = make_uml_element($base, $ns, $name);
+    my $owned_element = append_new_element($ns_element,
+					   "Namespace.ownedElement",
+					   "UML", $UML);
+    element_set_namespace($ns_element);
+    push @namespace, $ns_element->getAttribute("xmi.id");
+    return $owned_element;
+}
+
