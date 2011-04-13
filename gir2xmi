@@ -8,7 +8,7 @@ use Pod::Usage;
 use Data::Dumper;
 use File::Spec::Functions;
 use ObjectRef;
-use Carp qw(cluck carp);
+use Carp qw(cluck carp croak confess);
 
 sub process_gir;
 sub preamble;
@@ -36,7 +36,9 @@ $out->setDocumentElement($root);
 #Register the output namespace:
 $root->setNamespace($UML, "UML", 0);
 
-new_reg("root");
+$reg = new_reg("Global");
+$reg->set_global();
+
 my $model = preamble($root);
 process_gir($dom0, $model);
 $out->toFile($$options{output}, 1);
@@ -474,6 +476,12 @@ sub make_cleanup_datatypes {
 	my $elem = insert_uml_element($model, $$hash{type}, $$hash{name}, $pkg);
 	next unless $elem;
 	element_set_stereotype($elem, "datatype") if $$hash{type} eq "DataType";
+	eval {
+	    $reg->reregister_global($$hash{name});
+	};
+	if ($@) {
+	    warn $@;
+	}
     }
 }
 

@@ -6,16 +6,31 @@ package ObjectRef;
 
 use Data::Dumper;
 use Digest::MD5 qw(md5_hex);
-use Carp qw(cluck carp);
+use Carp qw(cluck carp croak confess);
 
 our $curl = "http://www.gtk.org/introspection/c/1.0";
+our $global;
 
 sub new {
     my ($c_name) = @_;
     my $class = ref($c_name) || $c_name;
     my $self = {};
+    $$self{aliases} = {};
     bless $self, $class;
     return $self;
+}
+
+sub set_global {
+    $global = shift;
+}
+
+sub global {
+    return $global;
+}
+
+sub is_global {
+    my $self = shift;
+    return $self == $global;
 }
 
 sub exists {
@@ -24,8 +39,12 @@ sub exists {
 #    warn "$name exists in registry" if exists $$self{name};
 #    warn "$name is an alias for $$self{aliases}{$name}"
 #	if exists $$self{aliases}{$name};
-    return exists $$self{$name} ||
-	exists $$self{aliases}{$name} && exists $$self{$$self{aliases}{$name}};
+    my $exists = (exists $$self{$name} ||
+		  exists $$self{aliases}{$name} &&
+		  exists $$self{$$self{aliases}{$name}});
+
+    return $global->exists($name) unless $exists || $self == $global;
+    return $exists;
 }
 
 #Make a unique id, combining an item name with a qualifier and adding
@@ -48,7 +67,7 @@ sub register_object {
     my $entry = $$self{$name};
     if ($$entry{type} && $$entry{type} ne $type &&
 	$$entry{type} ne "Temporary") {
-	carp ("Attempt to register existing object $$entry{type}:$name with new type $type");
+	cluck ("Attempt to register existing object $$entry{type}:$name with new type $type");
 	return $$entry{id};
     }
     $$entry{real} = $$entry{real} || $real ? 1 : 0;
@@ -68,6 +87,7 @@ sub object_id {
     if (exists $$self{$name}) {
 	return $$self{$name}{id};
     }
+    return $global->object_id($type, $name) if $global->exists($name);
     return $self->register_object($type, $name);
 }
 
@@ -75,6 +95,8 @@ sub object_type {
     my ($self, $name) = @_;
     return undef unless $name;
     $name = $$self{aliases}{$name} if exists $$self{aliases}{$name};
+    return $global->object_type($name)
+	unless exists $$self{$name} || $self == $global;
     return undef unless exists $$self{$name};
     return $$self{$name}{type};
 }
@@ -98,6 +120,32 @@ sub get_unregistered {
 	push @$list, $hash;
     }
     return $list;
+}
+
+sub reregister_global {
+    my ($self, $name) = @_;
+    croak "Don't call reregister_global on global" if $global == $self;
+    croak "$name already registered in global" if $global->exists($name);
+    if (exists $$self{aliases}{$name}) {
+	$name = $$self{aliases}{$name};
+	croak "Real name $name already exists in global, aliased by $name"
+	    if $global->exists($name);
+    }
+    $$global{$name} = $$self{$name};
+    delete $$self{$name};
+    my @aliases;
+    for my $alias (keys %{$$self{aliases}}) {
+	push @aliases, $alias if $$self{aliases}{$alias} eq $name;
+    }
+    for my $alias (@aliases) {
+	if (exists $$global{aliases}{$alias}) {
+	    carp "Alias $alias already exists in global, skipping";
+	    delete $$self{aliases};
+	    next;
+	}
+	$$global{aliases}{$alias} = $name;
+	delete $$self{$alias};
+    }
 }
 
 sub change_type {
