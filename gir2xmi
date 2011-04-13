@@ -201,6 +201,9 @@ sub register_types {
     foreach my $class ($xpc->findnodes("gir:class|gir:record|gir:union")) {
 	$reg->register_object("Class", $class->getAttribute("name"));
     }
+    foreach my $class ($xpc->findnodes("gir:interface")) {
+	$reg->register_object("Interface", $class->getAttribute("name"));
+    }
     foreach my $class ($xpc->findnodes("gir:callback")) {
 	$reg->register_object("Callback", $class->getAttribute("name"));
     }
@@ -458,6 +461,21 @@ sub make_utility_interface {
     my $util = make_uml_element($dest, "Interface", "Utility");
     my $feature = append_new_element($util, "Classifier.feature", "UML", $UML);
     make_operations($src, $feature);
+    foreach my $hash (@{$reg->get_unregistered}) {
+	unless ($$hash{type} && $$hash{name}) {
+	    print Data::Dumper->Dump([$hash], ["Registered Hash"]);
+	    next;
+	}
+	$$hash{type} = "DataType" if $$hash{type} eq "Temporary";
+	if ($$hash{type} eq "Callback") {
+	    $reg->change_type($$hash{name}, "DataType");
+	    my $elem = make_uml_element($dest, "DataType", $$hash{name});
+	    next unless $elem;
+	    element_set_stereotype($elem, "callback");
+	    $elem->setAttribute("comment", "$$hash{name}-impl");
+	    next;
+	}
+    }
 }
 
 sub make_cleanup_datatypes {
@@ -469,12 +487,8 @@ sub make_cleanup_datatypes {
 	}
 	$$hash{type} = "DataType" if $$hash{type} eq "Temporary";
 	if ($$hash{type} eq "Callback") {
-	    $reg->change_type($$hash{name}, "DataType");
-	    my $elem = insert_uml_element($model, "DataType",
-					  $$hash{name}, $pkg);
-	    next unless $elem;
-	    element_set_stereotype($elem, "callback");
-	    $elem->setAttribute("comment", "$$hash{name}-impl");
+	    my $pkg_name = $pkg->getAttribute("name");
+	    warn "Unregistered Callback $$hash{name} found in $pkg_name";
 	    next;
 	}
 	warn "Uninstantiated $$hash{type} $$hash{name}" if $$hash{type} ne "DataType";
@@ -516,9 +530,9 @@ sub build_model {
     my ($src, $dest) = @_;
     register_types($src, $dest);
     make_enumerations($src, $dest);
-    make_utility_interface($src, $dest);
     make_interfaces($src, $dest);
     make_classes($src, $dest);
+    make_utility_interface($src, $dest);
 }
 
 sub append_new_element {
