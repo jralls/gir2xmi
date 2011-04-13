@@ -95,8 +95,7 @@ sub preamble {
 sub new_reg {
     my $name = shift;
     push @obj_key, $name;
-    $objects{$name} = ObjectRef->new;
-    $reg = $objects{$name};
+    $reg = $objects{$name} = ObjectRef->new;
 }
 
 sub pop_reg {
@@ -302,7 +301,9 @@ sub make_attributes {
 		$reg->exists($child_name) &&
 		$reg->object_type($child_name) &&
 		$reg->object_type($child_name) eq "callback") {
-#FIXME: Need to construct a signature, but need to have the package-level callbacks processed first.
+		#Do nothing. Type will point to a new DataType which
+		#will correspond to an Operation in the Utility
+		#Interface.
 	    } else {
 		eval {
 		    set_type_attribute($elem, $child);
@@ -370,7 +371,11 @@ sub make_sig_from_gir {
 	$signature .= ", ";
     }
 #	    print "Callback signature before substringing $signature\n";
-    $signature = substr( $signature, 0, -2) . ")";
+    if ($signature =~ /.*,/) {
+	$signature = substr( $signature, 0, -2) . ")";
+    } else {
+	$signature .= ")";
+    }
 #	    print "Callback signature after substringing $signature\n";
     return $signature;
 }
