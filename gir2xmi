@@ -112,9 +112,20 @@ sub current_namespace {
 
 our @includes;
 
-sub find_include {
+sub check_include {
     my ($name) = @_;
     return scalar grep /^$name$/, @includes;
+}
+
+sub find_include {
+    my ($filename) = @_;
+    my $path;
+    for my $pathname (split ":", $$options{gir_path}) {
+	$path =  catfile($pathname, $filename);
+	last if -f $path;
+    }
+    die "$filename not found in paths $$options{gir_path}" unless $path;
+    return $path;
 }
 
 sub parse_type {
@@ -171,10 +182,9 @@ sub process_gir {
 	my $name = $inc->getAttribute("name");
 	my $version = $inc->getAttribute("version");
 	my $filename = "$name-$version.gir";
-	next if find_include($filename);
+	next if check_include($filename);
 	push @includes, $filename;
-	my $path = catfile($$options{gir_path}, $filename);
-	die "$path not found" unless -f $path;
+	my $path = find_include($filename);
 	my $new_dom = XML::LibXML->load_xml(location => $path) or
 	    die "Parse failed for Gir $path";
 	process_gir($new_dom, $base);
