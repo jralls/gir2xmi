@@ -15,11 +15,12 @@ sub preamble;
 sub append_new_element;
 
 my $options = {};
-our ($class, @namespace, %objects, @obj_key, $reg);
+our ($class, @namespace, %objects, @obj_key, $reg, @associations, @generalizations);
 
 GetOptions(
     "output=s" => \$$options{output},
-    "path=s" => \$$options{gir_path}
+    "path=s" => \$$options{gir_path},
+    "umbrello" => \$$options{umbrello}
     ) or die "Option processing failed";
 
 my ($file) = @ARGV;
@@ -137,7 +138,7 @@ sub parse_type {
 	die "Registry $regname has an object $name with no type"
 	    unless $obj_type;
 	my $id = $registry->object_id($obj_type, $name);
-	return {name => $name, id => $id};
+	return {name => $name, id => $id, type => $obj_type};
     }
 
     $registry->register_alias($type_elem) if ($name && $type && $name ne $type);
@@ -309,6 +310,23 @@ sub make_attributes {
 		#Interface.
 	    } else {
 		eval {
+		    my $type = parse_type($child);
+		    my $class = $dest->parentNode;
+		    my $clname = $class->getAttribute("name");
+		    my $clid = $class->getAttribute("xmi.id");
+		    die "Malformed class\n" . $dest->toString(1)
+			unless $clname && $clid;
+		    push(@associations, { from => $clid,
+					  to => $$type{id},
+					  name => "$clname" . "::$name" })
+			if ($$type{type} && $$type{type} eq "Class");
+		};
+		if ($@) {
+		    warn "Type resolution failure on\n" .
+			$field->toString(1) . "\n$@";
+		    next;
+		}
+		eval {
 		    set_type_attribute($elem, $child);
 		};
 		if ( $@ ) {
@@ -456,6 +474,37 @@ sub make_parameters {
     }
 }
 
+sub make_association_end {
+    my ($dest, $participant, $nav, $agg) = @_;
+    die "Can\'t make an association end with no participant"
+	unless $participant;
+    $agg = $agg || "none";
+    $nav = $nav || "false";
+    my $end = append_new_element($dest, "AssociationEnd", "UML", $UML);
+    $end->setAttribute("xmi.id", $reg->make_id("from", "AssociationEnd"));
+    $end->setAttribute("visibility", "public");
+    $end->setAttribute("isSpecification", "false");
+    $end->setAttribute("isNavigable", $nav);
+    $end->setAttribute("ordering", "unordered");
+    $end->setAttribute("aggregation", $agg);
+    $end->setAttribute("targetScope", "instance");
+    $end->setAttribute("changeability", "changeable");
+    $end->setAttribute("participant", $participant);
+    return $end;
+}
+
+sub make_associations {
+    my ($dest) = @_;
+    while (my $assoc = pop @associations) {
+	my $elem = make_uml_element($dest, "Association", "$$assoc{name}");
+	element_set_namespace($elem);
+	my $conn = append_new_element($elem, "Association.connection",
+				      "UML", $UML);
+	make_association_end($conn, $$assoc{from}, "false");
+	make_association_end($conn, $$assoc{to}, "true");
+    }
+}
+
 sub make_utility_interface {
     my ($src, $dest) = @_;
     my $util = make_uml_element($dest, "Interface", "Utility");
@@ -533,6 +582,7 @@ sub build_model {
     make_interfaces($src, $dest);
     make_classes($src, $dest);
     make_utility_interface($src, $dest);
+    make_associations($dest);
 }
 
 sub append_new_element {
