@@ -264,13 +264,16 @@ sub make_classes {
 	my $parent = $class->getAttribute("parent");
 	if ($parent && $parent ne $name) {
 	    my $parent_id;
+	    my $id = $elem->getAttribute("xmi.id");
 	    if ($parent =~ /(\w+)\.(\w+)/) {
 		$parent_id = $objects{$1}->object_id("Class", $2);
 	    } else {
 		$parent_id = $reg->object_id("Class", $parent);
 	    }
-	    $parent_id = "Not Found" unless $parent_id;
-	    $elem->setAttribute("parent", $parent_id);
+	    push @generalizations, {parent => $parent_id,
+				    child => $id,
+				    name => $name};
+
 	}
 	my $feature = append_new_element($elem, "Classifier.feature",
 					 "UML", $UML);
@@ -505,6 +508,19 @@ sub make_associations {
     }
 }
 
+sub make_generalizations {
+    my ($dest) = @_;
+    while (my $gen = pop @generalizations) {
+	my $elem = append_new_element($dest, "Generalization", "UML", $UML);
+	element_set_namespace($elem);
+	$elem->setAttribute("xmi.id", $reg->make_id($$gen{name},
+						   "Generalization"));
+	$elem->setAttribute("parent", $$gen{parent});
+	$elem->setAttribute("child", $$gen{child});
+    }
+}
+
+
 sub make_utility_interface {
     my ($src, $dest) = @_;
     my $util = make_uml_element($dest, "Interface", "Utility");
@@ -583,6 +599,7 @@ sub build_model {
     make_classes($src, $dest);
     make_utility_interface($src, $dest);
     make_associations($dest);
+    make_generalizations($dest);
 }
 
 sub append_new_element {
