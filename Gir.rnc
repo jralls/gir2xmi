@@ -1,0 +1,329 @@
+default namespace = "http://www.gtk.org/introspection/core/1.0"
+namespace c = "http://www.gtk.org/introspection/c/1.0"
+namespace glib = "http://www.gtk.org/introspection/glib/1.0"
+
+start = element repository {
+   version-type,
+   element-include*,
+   element-package*,
+   element-c-include*,
+   element-namespace
+}
+
+element-namespace =   element namespace {
+   (name-type,
+   version-type?,
+   attribute shared-library { text }?,
+   attribute c:identifier-prefixes { text }?,
+   attribute c:symbol-prefixes { text }?)&
+   element-doc*&
+   element-alias*&
+   element-boxed*&
+   element-constant*&
+   element-callback*&
+   element-function*&
+   element-enumeration*&
+   element-union*&
+   element-bitfield*&
+   element-class*&
+   element-record*&
+   element-interface*
+}
+
+element-package = element package {
+   attribute name { token }
+}
+
+element-c-include = element c:include {
+   attribute name { token }
+}
+
+element-doc = element doc {
+   attribute xml:whitespace { token }?,
+   text
+}
+
+element-alias = element alias {
+   name-type-type,
+   element-doc*,
+   element-type
+}
+
+element-constant = element constant {
+   (
+      name-type,
+      attribute value { xsd:normalizedString }
+   )&
+   element-doc*&
+   element-type
+}
+
+element-enumeration = element enumeration {
+   (
+      name-type-type,
+      version-type?,
+      gtype-type?,
+      attribute glib:error-quark { token }?
+   )&
+   element-doc*&
+   element-member+
+}
+
+element-bitfield = element bitfield {
+   (
+      name-type-type,
+      version-type?,
+      gtype-type?
+   )&
+   element-doc*&
+   element-member+
+}
+
+element-member = element member {
+   name-type,
+   attribute value { xsd:integer },
+   attribute c:identifier { xsd:NCName },
+   attribute glib:nick { token }?
+}
+
+element-class = element class {
+   (
+      name-type-type,
+      version-type?,
+      symbol-prefix-type,
+      attribute parent { xsd:NCName },
+      attribute abstract { xsd:boolean }?,
+      gtype-type?
+   )&
+   element-doc*&
+   element-implements*&
+   element-constructor*&
+   element-function*&
+   element-method*&
+   element-virtual-method*&
+   field-or-union-type*&
+   element-property*&
+   element-signal*&
+   element-class*
+}
+
+element-interface = element interface {
+   (
+      name-type-type,
+      version-type?,
+      symbol-prefix-type,
+      gtype-type?
+   )&
+   element-doc*&
+   element-prerequisite*&
+   element-virtual-method*&
+   element-method*&
+   element-property*&
+   element-signal*
+}
+
+element-record = element record {
+   (
+      name-type-type,
+      version-type?,
+      gtype-type?,
+      attribute disguised { xsd:boolean }?,
+      attribute foreign { xsd:boolean }?,
+      attribute glib:is-gtype-struct-for { xsd:NCName }?,
+      symbol-prefix-type?
+   )&
+   element-doc*&
+   field-or-union-type*&
+   element-constructor*&
+   element-method*
+}
+
+element-type = element type {
+   name-type?,
+   attribute c:type { token }?,
+   element-type*
+}
+
+element-array = element array {
+   name-type-type,
+   attribute length { xsd:nonNegativeInteger }?,
+   attribute zero-terminated { xsd:boolean }?,
+   attribute fixed-size { xsd:positiveInteger }?,
+   element-type
+}
+
+element-implements = element implements {
+   attribute name { token }
+}
+
+element-prerequisite = element prerequisite {
+   attribute name { token }
+}
+
+element-parameter = element parameter {
+   (
+      transfer-ownership-type?,
+      attribute closure { xsd:nonNegativeInteger }?,
+      attribute allow-none { xsd:boolean }?,
+      attribute scope { "call"|"async"|"notified" }?,
+      attribute destroy { xsd:nonNegativeInteger }?,
+      attribute direction { "in"|"out"|"inout" }?,
+      attribute caller-allocates { xsd:boolean }?
+   ) &
+   element-doc*&
+   (
+      (
+      name-type?,
+      value-type
+      ) |
+      element varargs { empty }
+   )
+}
+
+element-return-value = element return-value {
+   transfer-ownership-type?&
+   element-doc*&
+   value-type
+}
+
+element-parameters = element parameters {
+   element-doc*&
+   element-parameter*
+}
+
+element-callback = element callback {
+   function-type
+}
+
+element-virtual-method = element virtual-method {
+   attribute invoker { xsd:NCName }?,
+   function-type
+}
+
+element-constructor = element constructor {
+   function-type
+}
+
+element-function = element function {
+   function-type
+}
+
+element-method = element method {
+   function-type
+}
+
+element-field = element field {
+   name-type,
+   introspectable-type?,
+   attribute writable { xsd:boolean }?,
+   attribute readable { xsd:boolean }?,
+   attribute private { xsd:boolean }?,
+   attribute bits { xsd:positiveInteger }?,
+   (
+      value-type |
+      element-callback
+   )
+}
+
+element-union = element union {
+   (
+      name-type-type,
+      gtype-type?,
+      symbol-prefix-type?
+   )&
+   element-doc*&
+   record-or-field-type+&
+   element-constructor*&
+   element-method*
+}
+
+element-property = element property {
+   (
+      name-type,
+      version-type?,
+      introspectable-type?,
+      attribute writable { xsd:boolean }?,
+      attribute readable { xsd:boolean }?,
+      attribute construct { xsd:boolean }?,
+      attribute construct-only { xsd:boolean }?,
+      transfer-ownership-type?
+   )&
+   element-doc*&
+   value-type
+}
+
+element-signal = element glib:signal {
+   name-type,
+   version-type?,
+   deprecated-type?,
+   introspectable-type?,
+   element-doc*,
+   element-return-value?,
+   element-parameters?
+}
+
+element-boxed = element glib:boxed {
+   attribute glib:name { xsd:NCName },
+   symbol-prefix-type,
+   gtype-type
+}
+
+element-include = element include {
+   name-type,
+   attribute version { token }
+}
+
+name-type = attribute name { token }
+version-type = attribute version { xsd:NMTOKEN }
+introspectable-type = attribute introspectable { xsd:boolean }
+
+name-type-type =
+   name-type?,
+   attribute c:type { token }?
+
+value-type = (
+   element-array |
+   element-type
+)
+
+arg-return-type =
+   element-doc?,
+   element-return-value,
+   element-parameters?
+
+function-type =
+   name-type-type,
+   version-type?,
+   attribute c:identifier { xsd:NCName }?,
+   introspectable-type?,
+   deprecated-type?,
+   attribute throws { xsd:boolean }?,
+   (
+      attribute shadowed-by { xsd:NCName } |
+      attribute shadows { xsd:NCName }
+   )?,
+   arg-return-type
+
+transfer-ownership-type = attribute transfer-ownership { "none"|"full"|"container" }
+
+symbol-prefix-type = attribute c:symbol-prefix { xsd:NCName }
+
+gtype-type =
+   attribute glib:type-name { xsd:NCName },
+   attribute glib:get-type { token },
+   attribute glib:type-struct { xsd:NCName }?
+
+field-or-union-type = (
+   element-union |
+   element-field
+)
+
+record-or-field-type = (
+   element-record |
+   element-field
+)
+
+deprecated-type = (
+   attribute deprecated { xsd:normalizedString },
+   attribute deprecated-version { token }?
+)
