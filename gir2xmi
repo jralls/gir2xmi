@@ -298,7 +298,7 @@ sub make_attributes {
     foreach my $field ($xpc->findnodes("gir:field|gir:property")) {
 	my $name = $field->getAttribute("name");
 	my $reg_name = $clname ? "$clname:Attribute:$name" : $name;
-	my $id = $reg->register_object("Attribute", $reg_name, 1);
+	my $id = $reg->make_id("Attribute", $reg_name, 1);
 	my $elem = append_new_element($dest, "Attribute", "UML", $UML);
 	model_element_attrs($elem, $name, $id);
 	element_set_stereotype($elem, "property")
