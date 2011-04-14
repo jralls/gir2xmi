@@ -1,0 +1,21 @@
+Need to visualize a GObject-based class structure? If you have your
+project set up to use gobject-introspection, you can create a UML
+model in XMI from it, ready to import into ArgoUML or KDE's Umbrello.
+
+You'll need the two perl files from this repository, gir2xmi and ObjectRef.pm.
+
+You'll also need the following dependencies from CPAN:
+
+XML::LibXML
+Getopt::Long
+Pod::Usage
+Data::Dumper
+File::Spec::Functions
+Digest::MD5
+
+Of course, you may already have these installed.
+
+The program is documented with POD, so you can say "perldoc gir2xmi"
+or "gir2xmi -man" to read the documentation.
+
+Gir2xmi is licensed under the GNU Public License, Version 3.
