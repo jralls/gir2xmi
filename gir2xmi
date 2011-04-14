@@ -230,10 +230,16 @@ sub make_enumerations {
 	my @members = $xpc->findnodes("gir:member", $enum);
 	next unless @members;
 	foreach my $member (@members) {
-	    my $tag = append_new_element($elem, "Enumeration.literal",
-					 "UML", $UML);
-	    my $lit = append_new_element($tag, "EnumerationLiteral",
-					 "UML", $UML);
+	    my $lit;
+	    unless ($$options{umbrello}) {
+		my $tag = append_new_element($elem, "Enumeration.literal",
+					     "UML", $UML);
+		$lit = append_new_element($tag, "EnumerationLiteral",
+					     "UML", $UML);
+	    } else {
+		$lit = append_new_element($elem, "EnumerationLiteral",
+					     "UML", $UML);
+	    }
 	    $lit->setAttribute("name", $member->getAttributeNS($curl,
 							       "identifier"));
 	}
